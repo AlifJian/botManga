@@ -1,34 +1,48 @@
-const puppeteer = require('puppeteer-extra');
-const stealth = require("puppeteer-extra-plugin-stealth");
-const fs = require('fs');
-const pdf = require("pdfkit");
-const { default: axios } = require('axios');
-const { Browser } = require('puppeteer');
-const downloadFile = (url) => {
-  return axios
-    .get(url, {
-      responseType: "text",
-      responseEncoding : "base64"
-    })
-    .then(response => response.data)
-}
+import puppeteer from 'puppeteer-extra';
+import stealth from "puppeteer-extra-plugin-stealth";
+// import { Browser } from 'puppeteer';
+import axios from 'axios';
+import fs from 'fs';
+import pdf from "pdfkit";
+import sharp from "sharp";
 
 
 puppeteer.use(stealth());
 
-function delay(time) {
-    return new Promise(function(resolve) {
-    setTimeout(resolve, time)
-    });
+const downloadFile = (url) => {
+  return axios
+    .get(url, {
+      responseType: "arraybuffer"
+    })
+    .then(response => Buffer.from(response.data, "binary").toString('base64'))
+  }
+  
+
+const convertToJpeg = async (imageUrl, index) => {
+  const base64Img = await downloadFile(imageUrl);
+  const buffer = Buffer.from(base64Img, "base64");
+  await sharp(buffer).jpeg().toFile(`./download/${index}.jpeg`);
+};
+
+const imageFormat = async (imageUrl) => {
+  const supportedFormats = ["jpeg", "jpg", "png", "gif", "webp"];
+  const format = imageUrl.split(".").pop();
+  if(supportedFormats.includes(format)){
+    return format.toLowerCase();
+  }
+  return null;
 }
 
-exports.mangaToto = async () => {
+
+const mangaToto = async () => {
     const url = "https://wto.to"
-    const browser = await puppeteer.launch({headless : true});
+    const browser = await puppeteer.launch({headless : false});
 
     const page = await browser.newPage();
     await page.setJavaScriptEnabled(true);
-    await page.goto(url, {waitUntil : 'networkidle0', timeout : 20000});
+    console.log("menuju page")
+    await page.goto(url);
+    console.log("pemrosesan")
     //Ambil data dari w.toto
     const seriesList = await page.$$('.col.item.line-b.no-flag');
     const Data = []
@@ -49,7 +63,7 @@ exports.mangaToto = async () => {
     const volChapInfo = await series.$eval('.item-volch a.visited', info => info.textContent.trim());
 
     //Ambil Informasi link chapter
-    const chpUrl = await series.$eval('.item-volch a.visited', anchor => anchor.href);
+    const chpUrl = await series.$eval('.item-volch a.visited', anchor => anchor.href.slice("https://wto.to/chapter/".length));
 
 
     // Ambil informasi pengguna dan waktu
@@ -65,25 +79,17 @@ exports.mangaToto = async () => {
         chpUrl,
         updateAt : userInfo
     }
-
     Data.push(data);
-    // Tampilkan hasil
-    console.log('URL:', link);
-    console.log('Gambar:', imageUrl);
-    console.log('Judul:', title);
-    console.log('Genre:', genres.join(', '));
-    console.log('Vol. & Ch.:', volChapInfo);
-    console.log('Pengguna & Waktu:', userInfo);
-    console.log('\n');
   }
-
-    await browser.close()
-    return Data;
+  await page.setDefaultNavigationTimeout(0);
+  await browser.close()
+  return Data;
 }
 
 const mangaTotoDownload = async (chapter) => {
     const url = "https://wto.to/chapter/" + chapter;
     const Datas = [];
+    console.log(url)
     const browser = await puppeteer.launch({headless : false});
   
       console.log("buat page")
@@ -91,7 +97,7 @@ const mangaTotoDownload = async (chapter) => {
       console.log("selesai buat page")
       await page.setJavaScriptEnabled(true);
       console.log("menuju page")
-      await page.goto(url, {waitUntil : 'networkidle0'});
+      await page.goto(url, {waitUntil : 'networkidle2', timeout : 0});
     try {
       console.log("Scrolll")
       // Get scroll width and height of the rendered page and set viewport
@@ -119,10 +125,22 @@ const mangaTotoDownload = async (chapter) => {
     const mangaPdf = new pdf;
     mangaPdf.pipe(fs.createWriteStream(`${chapter}.pdf`))
     for(let i = 0; i < Datas.length; i++){
-      const base64Img = await downloadFile(Datas[i]);
-      fs.writeFileSync(`./download/${i}.jpeg`, base64Img, {encoding : "base64"})
-      console.log(base64Img)
-      // mangaPdf.image(`data:image/png;base64,${base64Img}`);
+      const format = await imageFormat(Datas[i]);
+      console.log(format)
+      if(format == "webp"){
+        await convertToJpeg(Datas[i], i);
+        mangaPdf.image(`./download/${i}.jpeg`, { fit: [612, 792] });
+        mangaPdf.addPage();
+        fs.unlinkSync(`./download/${i}.jpeg`);
+      }else if(format == "jpeg" || format == "png"){
+        const base64Img = await downloadFile(Datas[i]);
+        await fs.writeFileSync(`./download/${i}.${format})`, base64Img, {encoding : "base64"})
+        await mangaPdf.image(`./download/${i}.${format}`);
+        await mangaPdf.addPage();
+        await fs.unlinkSync(`./download/${i}.jpeg`);
+      }else{
+        console.log("format gambar tidak didukung")
+      }
       
     }
     mangaPdf.end()
@@ -130,7 +148,7 @@ const mangaTotoDownload = async (chapter) => {
     return Datas.length
 }
 
-exports.screenshot = async (url) => {
+const screenshot = async (url) => {
     const browser = await puppeteer.launch({headless : true});
 
     const page = await browser.newPage();
@@ -142,10 +160,13 @@ exports.screenshot = async (url) => {
     const bodyHeight = await page.evaluate(() => document.body.scrollHeight);
     await page.setViewport({ width: bodyWidth, height: bodyHeight });
 
-    delay(5000)
     await page.screenshot({path : "./image/image.jpg", fullPage : true});
 
     await browser.close()
 }
+// Perintah mendownload manga dengan param id
+mangaTotoDownload("2801984");
 
-mangaTotoDownload("2751126")
+// Perintah mendapatkan list manga
+// mangaToto().then( d => console.log(d))
+export {screenshot, mangaToto, mangaTotoDownload};
